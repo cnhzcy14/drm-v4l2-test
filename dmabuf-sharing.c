@@ -31,11 +31,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <getopt.h>
 
 #include <drm.h>
 #include <drm_mode.h>
 
 #include <linux/videodev2.h>
+#include <libv4l2.h>
 
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -204,7 +206,7 @@ static int buffer_create(struct buffer *b, int drmfd, struct setup *s,
 	gem.height = s->h;
 	gem.bpp = 32;
 	gem.size = size;
-	ret = ioctl(drmfd, DRM_IOCTL_MODE_CREATE_DUMB, &gem);
+	ret = drmIoctl(drmfd, DRM_IOCTL_MODE_CREATE_DUMB, &gem);
 	if (WARN_ON(ret, "CREATE_DUMB failed: %s\n", ERRSTR))
 		return -1;
 	printf("bo %u %ux%u bpp %u size %lu (%lu)\n", gem.handle, gem.width, gem.height, gem.bpp, (long)gem.size, (long)size);
@@ -214,7 +216,7 @@ static int buffer_create(struct buffer *b, int drmfd, struct setup *s,
 	memset(&prime, 0, sizeof prime);
 	prime.handle = b->bo_handle;
 
-	ret = ioctl(drmfd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime);
+	ret = drmIoctl(drmfd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &prime);
 	if (WARN_ON(ret, "PRIME_HANDLE_TO_FD failed: %s\n", ERRSTR))
 		goto fail_gem;
 	printf("dbuf_fd = %d\n", prime.fd);
@@ -246,7 +248,7 @@ fail_prime:
 fail_gem:
 	memset(&gem_destroy, 0, sizeof gem_destroy);
 	gem_destroy.handle = b->bo_handle,
-	ret = ioctl(drmfd, DRM_IOCTL_MODE_DESTROY_DUMB, &gem_destroy);
+	ret = drmIoctl(drmfd, DRM_IOCTL_MODE_DESTROY_DUMB, &gem_destroy);
 	WARN_ON(ret, "DESTROY_DUMB failed: %s\n", ERRSTR);
 
 	return -1;
@@ -410,7 +412,7 @@ int main(int argc, char *argv[])
 	struct v4l2_capability caps;
 	memset(&caps, 0, sizeof caps);
 
-	ret = ioctl(v4lfd, VIDIOC_QUERYCAP, &caps);
+	ret = v4l2_ioctl(v4lfd, VIDIOC_QUERYCAP, &caps);
 	BYE_ON(ret, "VIDIOC_QUERYCAP failed: %s\n", ERRSTR);
 
 	/* TODO: add single plane support */
@@ -421,7 +423,7 @@ int main(int argc, char *argv[])
 	memset(&fmt, 0, sizeof fmt);
 	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-	ret = ioctl(v4lfd, VIDIOC_G_FMT, &fmt);
+	ret = v4l2_ioctl(v4lfd, VIDIOC_G_FMT, &fmt);
 	BYE_ON(ret < 0, "VIDIOC_G_FMT failed: %s\n", ERRSTR);
 	printf("G_FMT(start): width = %u, height = %u, 4cc = %.4s\n",
 		fmt.fmt.pix.width, fmt.fmt.pix.height,
@@ -434,10 +436,10 @@ int main(int argc, char *argv[])
 	if (s.in_fourcc)
 		fmt.fmt.pix.pixelformat = s.in_fourcc;
 
-	ret = ioctl(v4lfd, VIDIOC_S_FMT, &fmt);
+	ret = v4l2_ioctl(v4lfd, VIDIOC_S_FMT, &fmt);
 	BYE_ON(ret < 0, "VIDIOC_S_FMT failed: %s\n", ERRSTR);
 
-	ret = ioctl(v4lfd, VIDIOC_G_FMT, &fmt);
+	ret = v4l2_ioctl(v4lfd, VIDIOC_G_FMT, &fmt);
 	BYE_ON(ret < 0, "VIDIOC_G_FMT failed: %s\n", ERRSTR);
 	printf("G_FMT(final): width = %u, height = %u, 4cc = %.4s\n",
 		fmt.fmt.pix.width, fmt.fmt.pix.height,
@@ -449,7 +451,7 @@ int main(int argc, char *argv[])
 	rqbufs.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	rqbufs.memory = V4L2_MEMORY_DMABUF;
 
-	ret = ioctl(v4lfd, VIDIOC_REQBUFS, &rqbufs);
+	ret = v4l2_ioctl(v4lfd, VIDIOC_REQBUFS, &rqbufs);
 	BYE_ON(ret < 0, "VIDIOC_REQBUFS failed: %s\n", ERRSTR);
 	BYE_ON(rqbufs.count < s.buffer_count, "video node allocated only "
 		"%u of %u buffers\n", rqbufs.count, s.buffer_count);
@@ -484,13 +486,13 @@ int main(int argc, char *argv[])
 		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		buf.memory = V4L2_MEMORY_DMABUF;
 		buf.m.fd = buffer[i].dbuf_fd;
-		ret = ioctl(v4lfd, VIDIOC_QBUF, &buf);
+		ret = v4l2_ioctl(v4lfd, VIDIOC_QBUF, &buf);
 		BYE_ON(ret < 0, "VIDIOC_QBUF for buffer %d failed: %s (fd %u)\n",
 			buf.index, ERRSTR, buffer[i].dbuf_fd);
 	}
 
 	int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	ret = ioctl(v4lfd, VIDIOC_STREAMON, &type);
+	ret = v4l2_ioctl(v4lfd, VIDIOC_STREAMON, &type);
 	BYE_ON(ret < 0, "STREAMON failed: %s\n", ERRSTR);
 
 	struct pollfd fds[] = {
@@ -510,7 +512,7 @@ int main(int argc, char *argv[])
 		memset(&buf, 0, sizeof buf);
 		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 		buf.memory = V4L2_MEMORY_DMABUF;
-		ret = ioctl(v4lfd, VIDIOC_DQBUF, &buf);
+		ret = v4l2_ioctl(v4lfd, VIDIOC_DQBUF, &buf);
 		BYE_ON(ret, "VIDIOC_DQBUF failed: %s\n", ERRSTR);
 
 		ret = drmModeSetPlane(drmfd, s.planeId, s.crtcId,
@@ -528,7 +530,7 @@ int main(int argc, char *argv[])
 			buf.index = stream.current_buffer;
 			buf.m.fd = stream.buffer[stream.current_buffer].dbuf_fd;
 
-			ret = ioctl(stream.v4lfd, VIDIOC_QBUF, &buf);
+			ret = v4l2_ioctl(stream.v4lfd, VIDIOC_QBUF, &buf);
 			BYE_ON(ret, "VIDIOC_QBUF(index = %d) failed: %s\n",
 			       stream.current_buffer, ERRSTR);
 		}
